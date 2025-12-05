@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/nabetse28/golang-mail-billing/config"
@@ -36,6 +38,43 @@ func startWorkers(n int, workerFunc func(job EmailJob)) chan<- EmailJob {
 	}
 
 	return jobs
+}
+
+func printHelp() {
+	fmt.Println(`
+Gmail Billing Organizer
+-----------------------
+Automates labeling and downloading Gmail attachments for billing purposes.
+
+USAGE:
+  gmail-billing [flags]
+
+FLAGS:
+  -config <path>          Path to YAML configuration file (default: config/config.yaml)
+  -query <gmail-query>    Override Gmail search query
+  -filter-year <YYYY>     Only process emails from this year
+  -filter-month <MM>      Only process emails from this month (1-12)
+  -download-only          Do NOT modify Gmail labels, only download attachments
+  -force-reprocess        Reprocess messages even if they have already been marked as processed
+  -h, -help, --help       Show this help message
+
+EXAMPLES:
+
+  # Run with default config
+  gmail-billing
+
+  # Only download attachments from November 2025
+  gmail-billing -filter-year 2025 -filter-month 11
+
+  # Override Gmail query
+  gmail-billing -query "from:amazon has:attachment"
+
+  # Force reprocessing even if already processed
+  gmail-billing -force-reprocess
+
+  # Use a different config file
+  gmail-billing -config ~/my-config.yaml
+`)
 }
 
 // ------------------------------------------------------------
@@ -185,7 +224,6 @@ PROCESS_MESSAGE:
 	}
 }
 
-
 // ------------------------------------------------------------
 // MAIN
 // ------------------------------------------------------------
@@ -193,14 +231,41 @@ func main() {
 	ctx := context.Background()
 	logging.Init()
 
+	// ---------------- FLAGS ----------------
+	help := flag.Bool("help", false, "Show help message")
+	helpShort := flag.Bool("h", false, "Show help message")
+
+	configPath := flag.String("config", "config/config.yaml", "Path to YAML configuration file")
+	cliQuery := flag.String("query", "", "Override Gmail search query (optional)")
+	cliFilterYear := flag.Int("filter-year", 0, "Override filter year (optional)")
+	cliFilterMonth := flag.Int("filter-month", 0, "Override filter month (1-12, optional)")
+	cliDownloadOnly := flag.Bool("download-only", false, "Run in download-only mode (override config, optional)")
+	cliForceReprocess := flag.Bool("force-reprocess", false, "Force reprocessing even if already processed")
+
+	for _, arg := range os.Args {
+		if arg == "--help" {
+			printHelp()
+			return
+		}
+	}
+
+	flag.Parse()
+
+	// Show help if requested
+	if *help || *helpShort {
+		printHelp()
+		return
+	}
+	// ---------------------------------------
+
 	logging.Infof("Starting Gmail organizer...")
 
 	// ------------------------------------------------------------
 	// 1) Load config
 	// ------------------------------------------------------------
-	cfg, err := config.Load("config/config.yaml")
+	cfg, err := config.Load(*configPath)
 	if err != nil {
-		logging.Fatalf("Failed to load config: %v", err)
+		logging.Fatalf("Failed to load config from %s: %v", *configPath, err)
 	}
 
 	logging.Infof(
@@ -209,6 +274,22 @@ func main() {
 		cfg.Gmail.BaseBillingLabel, cfg.Paths.BaseInvoicesPath,
 		cfg.Gmail.FilterYear, cfg.Gmail.FilterMonth, cfg.Gmail.DownloadOnly,
 	)
+
+	if *cliQuery != "" {
+		cfg.Gmail.Query = *cliQuery
+	}
+	if *cliFilterYear != 0 {
+		cfg.Gmail.FilterYear = *cliFilterYear
+	}
+	if *cliFilterMonth != 0 {
+		cfg.Gmail.FilterMonth = *cliFilterMonth
+	}
+	if *cliDownloadOnly {
+		cfg.Gmail.DownloadOnly = true
+	}
+	if *cliForceReprocess {
+		cfg.Gmail.ForceReprocess = true
+	}
 
 	// ------------------------------------------------------------
 	// 2) Gmail service
