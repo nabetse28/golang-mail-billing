@@ -1,0 +1,12 @@
+gmail:
+  user: "me"                # "me" means the authenticated user
+  query: "has:attachment"   # we can refine this later
+  max_results: "all"          # messages per page for testing
+  base_billing_label: "Facturacion"
+  filter_year: 0      # 0 = no filter
+  filter_month: 0     # 0 = no filter
+  download_only: false
+  force_reprocess: false
+
+paths:
+  base_invoices_path: "~/Documents/Personal/Facturas"
