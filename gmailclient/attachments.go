@@ -4,6 +4,8 @@ package gmailclient
 import (
 	"encoding/base64"
 	"fmt"
+	"path/filepath"
+	"strings"
 
 	"github.com/nabetse28/golang-mail-billing/logging"
 	"github.com/nabetse28/golang-mail-billing/storage"
@@ -25,16 +27,24 @@ func collectAttachmentParts(part *gmail.MessagePart, result *[]*gmail.MessagePar
 	}
 }
 
-// DownloadAttachmentsToDir downloads all attachments of a message into the given directory.
+// DownloadedAttachment describes a file downloaded to disk.
+type DownloadedAttachment struct {
+	LocalPath        string
+	OriginalFilename string
+	Ext              string // without dot: "pdf", "xml", ...
+}
+
+// DownloadAttachmentsToDir downloads all attachments of a message into the given directory
+// and returns metadata about the downloaded files (including final local paths).
 func DownloadAttachmentsToDir(
 	srv *gmail.Service,
 	user string,
 	messageID string,
 	targetDir string,
-) error {
+) ([]DownloadedAttachment, error) {
 	msg, err := srv.Users.Messages.Get(user, messageID).Format("full").Do()
 	if err != nil {
-		return fmt.Errorf("failed to get message %s for attachments: %w", messageID, err)
+		return nil, fmt.Errorf("failed to get message %s for attachments: %w", messageID, err)
 	}
 
 	var attachmentParts []*gmail.MessagePart
@@ -42,11 +52,13 @@ func DownloadAttachmentsToDir(
 
 	if len(attachmentParts) == 0 {
 		logging.Infof("Message %s has no attachments", messageID)
-		return nil
+		return nil, nil
 	}
 
+	downloaded := make([]DownloadedAttachment, 0, len(attachmentParts))
+
 	for _, part := range attachmentParts {
-		filename := part.Filename
+		filename := strings.TrimSpace(part.Filename)
 		if filename == "" {
 			filename = "attachment"
 		}
@@ -64,11 +76,21 @@ func DownloadAttachmentsToDir(
 			continue
 		}
 
-		if _, err := storage.WriteFileUnique(targetDir, filename, data); err != nil {
+		finalPath, err := storage.WriteFileUnique(targetDir, filename, data)
+		if err != nil {
 			logging.Errorf("Failed to save attachment %s (message %s): %v", filename, messageID, err)
 			continue
 		}
+
+		finalName := filepath.Base(finalPath)
+		ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(finalName)), ".")
+
+		downloaded = append(downloaded, DownloadedAttachment{
+			LocalPath:        finalPath,
+			OriginalFilename: filename,
+			Ext:              ext,
+		})
 	}
 
-	return nil
+	return downloaded, nil
 }

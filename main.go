@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/nabetse28/golang-mail-billing/config"
@@ -203,8 +204,30 @@ PROCESS_MESSAGE:
 	// ------------------------------------------------------------
 	// 7) Download attachments
 	// ------------------------------------------------------------
-	if err := gmailclient.DownloadAttachmentsToDir(srv, user, messageID, dir); err != nil {
+	atts, err := gmailclient.DownloadAttachmentsToDir(srv, user, messageID, dir)
+	if err != nil {
 		logging.Errorf("Failed downloading attachments for %s: %v", messageID, err)
+		return
+	}
+
+	if len(atts) == 0 {
+		logging.Infof("No attachments downloaded for %s", messageID)
+		return
+	}
+
+	from, subject, err := gmailclient.GetFromAndSubject(srv, user, messageID)
+	if err != nil {
+		logging.Errorf("Failed reading headers for %s: %v", messageID, err)
+		// seguimos con fallbacks
+	}
+
+	company := gmailclient.DetectCompany(atts, from, subject)
+
+	runTS := time.Now().Format("20060102T150405.000")
+	runTS = strings.ReplaceAll(runTS, ".", "")
+
+	if err := gmailclient.RenameDownloadedAttachments(dir, company, msgDate, runTS, atts); err != nil {
+		logging.Errorf("Failed renaming attachments for %s: %v", messageID, err)
 		return
 	}
 
