@@ -332,7 +332,20 @@ func main() {
 	if !cfg.Gmail.DownloadOnly {
 		labelService, err = gmailclient.NewLabelService(srv, user)
 		if err != nil {
-			logging.Fatalf("Failed to init LabelService: %v", err)
+			if gmailclient.IsInvalidGrant(err) {
+				logging.Infof("Token expirado o revocado (invalid_grant). Eliminando %s y reautenticando...", gmailclient.TokenFile)
+				if rmErr := gmailclient.RemoveTokenFile(); rmErr != nil {
+					logging.Fatalf("Failed to remove invalid token file: %v", rmErr)
+				}
+				srv, err = gmailclient.NewService(ctx, "credentials.json", gmail.GmailModifyScope)
+				if err != nil {
+					logging.Fatalf("Failed to create Gmail service after reauth: %v", err)
+				}
+				labelService, err = gmailclient.NewLabelService(srv, user)
+			}
+			if err != nil {
+				logging.Fatalf("Failed to init LabelService: %v", err)
+			}
 		}
 	}
 
@@ -361,6 +374,7 @@ func main() {
 	pageToken := ""
 	pageNum := 0
 	totalMsgs := 0
+	invalidGrantRetries := 0
 
 	for {
 		pageNum++
@@ -376,8 +390,36 @@ func main() {
 
 		resp, err := call.Do()
 		if err != nil {
+			if gmailclient.IsInvalidGrant(err) {
+				invalidGrantRetries++
+				if invalidGrantRetries > 1 {
+					logging.Fatalf("Token invalid_grant even after reauth. Aborting.")
+				}
+				logging.Infof("Token expirado o revocado (invalid_grant). Eliminando %s y reautenticando...", gmailclient.TokenFile)
+				if rmErr := gmailclient.RemoveTokenFile(); rmErr != nil {
+					logging.Fatalf("Failed to remove invalid token file: %v", rmErr)
+				}
+				srv, err = gmailclient.NewService(ctx, "credentials.json", gmail.GmailModifyScope)
+				if err != nil {
+					logging.Fatalf("Failed to create Gmail service after reauth: %v", err)
+				}
+				if !cfg.Gmail.DownloadOnly {
+					labelService, err = gmailclient.NewLabelService(srv, user)
+					if err != nil {
+						logging.Fatalf("Failed to init LabelService after reauth: %v", err)
+					}
+					processedLabelID, err = labelService.EnsureLabel(processedLabelName)
+					if err != nil {
+						logging.Fatalf("Cannot ensure processed label after reauth: %v", err)
+					}
+					logging.Infof("Using Processed label: %s (ID=%s)", processedLabelName, processedLabelID)
+				}
+				pageNum--
+				continue
+			}
 			logging.Fatalf("Failed listing messages: %v", err)
 		}
+		invalidGrantRetries = 0
 
 		if len(resp.Messages) == 0 {
 			logging.Infof("Page %d returned 0 messages.", pageNum)

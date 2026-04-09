@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/nabetse28/golang-mail-billing/logging"
 	"golang.org/x/oauth2"
@@ -55,7 +56,27 @@ func NewService(ctx context.Context, credentialsPath string, scopes ...string) (
 // if the token does not exist yet.
 func getClient(config *oauth2.Config) (*http.Client, error) {
 	tok, err := tokenFromFile(TokenFile)
-	if err != nil {
+	if err == nil {
+		refreshedTok, err := refreshToken(config, tok)
+		if err != nil {
+			if isInvalidGrant(err) {
+				logging.Infof("Token expirado o revocado (invalid_grant). Eliminando %s y reautenticando...", TokenFile)
+				if rmErr := os.Remove(TokenFile); rmErr != nil && !os.IsNotExist(rmErr) {
+					return nil, fmt.Errorf("failed to remove invalid token file: %w", rmErr)
+				}
+				tok = nil
+			} else {
+				return nil, fmt.Errorf("failed to refresh OAuth token: %w", err)
+			}
+		} else {
+			tok = refreshedTok
+			if err := saveToken(TokenFile, tok); err != nil {
+				return nil, fmt.Errorf("failed to save token to file: %w", err)
+			}
+		}
+	}
+
+	if tok == nil {
 		logging.Infof("No existing token found, starting OAuth flow...")
 		tok, err = getTokenFromWeb(config)
 		if err != nil {
@@ -65,6 +86,7 @@ func getClient(config *oauth2.Config) (*http.Client, error) {
 			return nil, fmt.Errorf("failed to save token to file: %w", err)
 		}
 	}
+
 	return config.Client(context.Background(), tok), nil
 }
 
@@ -167,6 +189,28 @@ func saveToken(path string, token *oauth2.Token) error {
 
 	if err := json.NewEncoder(f).Encode(token); err != nil {
 		return fmt.Errorf("failed to encode token to JSON: %w", err)
+	}
+	return nil
+}
+
+func refreshToken(config *oauth2.Config, token *oauth2.Token) (*oauth2.Token, error) {
+	ts := config.TokenSource(context.Background(), token)
+	return ts.Token()
+}
+
+func isInvalidGrant(err error) bool {
+	return strings.Contains(err.Error(), "invalid_grant")
+}
+
+// IsInvalidGrant exposes invalid_grant detection for API call recovery.
+func IsInvalidGrant(err error) bool {
+	return isInvalidGrant(err)
+}
+
+// RemoveTokenFile deletes the stored OAuth token file if present.
+func RemoveTokenFile() error {
+	if err := os.Remove(TokenFile); err != nil && !os.IsNotExist(err) {
+		return err
 	}
 	return nil
 }
